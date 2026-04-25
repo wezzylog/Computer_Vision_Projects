@@ -1,64 +1,206 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Eye Tracking Display</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        .container {
-            text-align: center;
-            background-color: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        #videoFeed {
-            width: 640px;
-            height: 480px;
-            background-color: #ddd;
-            margin-bottom: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            margin: 0 10px;
-            font-size: 16px;
-            cursor: pointer;
-        }
-    </style>
+<meta charset="UTF-8">
+<title>Eye Finger Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0d18; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: monospace; color: #888; }
+  h1 { font-size: 14px; letter-spacing: 0.1em; color: #555; margin-bottom: 1rem; text-transform: lowercase; }
+  #eyeCanvas { border-radius: 12px; display: block; }
+  video { display: none; }
+  #hud { margin-top: 12px; font-size: 12px; color: #444; display: flex; gap: 2rem; }
+  #hud span { color: #5db8a0; }
+  #msg { margin-top: 8px; font-size: 12px; color: #555; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>Eye Tracking Display</h1>
-        <div id="videoFeed">
-            <!-- Video feed will be displayed here -->
-        </div>
-        <div>
-            <button id="startBtn">Start Tracking</button>
-            <button id="stopBtn">Stop Tracking</button>
-        </div>
-    </div>
 
-    <script>
-        // JavaScript code for eye tracking functionality will go here
-        // This is where you'd integrate with your Python backend
-        document.getElementById('startBtn').addEventListener('click', function() {
-            console.log('Start tracking');
-            // Add code to start eye tracking
-        });
+<h1>eye tracker — point your index finger</h1>
+<canvas id="eyeCanvas" width="640" height="480"></canvas>
+<video id="video" playsinline></video>
+<div id="hud">gaze x: <span id="gx">0.00</span> &nbsp; gaze y: <span id="gy">0.00</span> &nbsp; hand: <span id="hd">none</span></div>
+<div id="msg">starting camera…</div>
 
-        document.getElementById('stopBtn').addEventListener('click', function() {
-            console.log('Stop tracking');
-            // Add code to stop eye tracking
-        });
-    </script>
+<script>
+const canvas = document.getElementById('eyeCanvas');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 480;
+const CX = W/2, CY = H/2;
+const ERX = 155, ERY = 105;
+const IRIS_R = 52, PUPIL_R = 21;
+const MAX_TRAVEL = IRIS_R - PUPIL_R - 6;
+
+let gaze = {x:0, y:0}, target = {x:0, y:0};
+let hasHand = false;
+
+// --- blink ---
+let nextBlink = Date.now() + 2000 + Math.random()*3000;
+let blinkDur = 130;
+function getBlinkVal() {
+  const now = Date.now();
+  if (now < nextBlink) return 0;
+  const t = now - nextBlink;
+  if (t > blinkDur) { nextBlink = Date.now() + 2000 + Math.random()*4000; return 0; }
+  return Math.pow(Math.sin((t/blinkDur)*Math.PI), 2);
+}
+
+function pseudoRng(seed) {
+  let s = seed;
+  return () => { s = Math.sin(s) * 10000; return s - Math.floor(s); };
+}
+
+function drawEye(blink) {
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = '#0f0d18';
+  ctx.fillRect(0,0,W,H);
+
+  const gx = gaze.x * MAX_TRAVEL * 0.85;
+  const gy = gaze.y * MAX_TRAVEL * 0.55;
+  const icx = CX + gx, icy = CY + gy;
+
+  // glow
+  const gl = ctx.createRadialGradient(CX,CY,0,CX,CY,ERX+80);
+  gl.addColorStop(0,'rgba(55,130,220,0.2)'); gl.addColorStop(1,'rgba(55,130,220,0)');
+  ctx.beginPath(); ctx.ellipse(CX,CY,ERX+80,ERY+80,0,0,Math.PI*2);
+  ctx.fillStyle=gl; ctx.fill();
+
+  // sclera clip
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(CX,CY,ERX,ERY,0,0,Math.PI*2); ctx.clip();
+  ctx.fillStyle='#e4dfd4'; ctx.fill();
+
+  // veins
+  const rng = pseudoRng(42);
+  ctx.globalAlpha=0.3;
+  for(let i=0;i<8;i++){
+    const a=rng()*Math.PI*2, l=30+rng()*50;
+    const sx=CX+Math.cos(a)*50, sy=CY+Math.sin(a)*30;
+    ctx.beginPath(); ctx.moveTo(sx,sy);
+    ctx.lineTo(sx+Math.cos(a)*l, sy+Math.sin(a)*l);
+    ctx.strokeStyle='#c06060'; ctx.lineWidth=0.8; ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+
+  // iris
+  ctx.beginPath(); ctx.arc(icx,icy,IRIS_R,0,Math.PI*2);
+  const ig=ctx.createRadialGradient(icx,icy-12,2,icx,icy,IRIS_R);
+  ig.addColorStop(0,'#52aad8'); ig.addColorStop(0.5,'#2070be'); ig.addColorStop(1,'#1248a0');
+  ctx.fillStyle=ig; ctx.fill();
+
+  // iris texture lines
+  for(let i=0;i<22;i++){
+    const a=(i/22)*Math.PI*2;
+    ctx.beginPath();
+    ctx.moveTo(icx+Math.cos(a)*(PUPIL_R+5), icy+Math.sin(a)*(PUPIL_R+5));
+    ctx.lineTo(icx+Math.cos(a)*(IRIS_R-4),  icy+Math.sin(a)*(IRIS_R-4));
+    ctx.strokeStyle='rgba(15,60,150,0.45)'; ctx.lineWidth=0.8; ctx.stroke();
+  }
+
+  // inner ring
+  ctx.beginPath(); ctx.arc(icx,icy,PUPIL_R+8,0,Math.PI*2);
+  ctx.strokeStyle='rgba(8,40,120,0.55)'; ctx.lineWidth=3; ctx.stroke();
+
+  // pupil
+  const pg=ctx.createRadialGradient(icx,icy,0,icx,icy,PUPIL_R);
+  pg.addColorStop(0,'#181818'); pg.addColorStop(1,'#040404');
+  ctx.beginPath(); ctx.arc(icx,icy,PUPIL_R,0,Math.PI*2);
+  ctx.fillStyle=pg; ctx.fill();
+
+  // highlights
+  ctx.beginPath(); ctx.arc(icx-IRIS_R/4, icy-IRIS_R/4, 9, 0, Math.PI*2);
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(icx-IRIS_R/4+14, icy-IRIS_R/4+12, 4, 0, Math.PI*2);
+  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fill();
+
+  ctx.restore();
+
+  // top eyelid
+  const topY = -ERY*1.18 + blink*ERY*1.12;
+  ctx.beginPath();
+  ctx.moveTo(CX-ERX-10, CY);
+  ctx.bezierCurveTo(CX-ERX/2, CY+topY, CX+ERX/2, CY+topY, CX+ERX+10, CY);
+  ctx.lineTo(CX+ERX+10, CY-ERY*2); ctx.lineTo(CX-ERX-10, CY-ERY*2);
+  ctx.closePath(); ctx.fillStyle='#0f0d18'; ctx.fill();
+
+  // bottom eyelid
+  ctx.beginPath();
+  ctx.moveTo(CX-ERX-10, CY);
+  ctx.bezierCurveTo(CX-ERX/2, CY+ERY*1.12, CX+ERX/2, CY+ERY*1.12, CX+ERX+10, CY);
+  ctx.lineTo(CX+ERX+10, CY+ERY*2); ctx.lineTo(CX-ERX-10, CY+ERY*2);
+  ctx.closePath(); ctx.fillStyle='#0f0d18'; ctx.fill();
+
+  // lid edge
+  ctx.beginPath();
+  ctx.moveTo(CX-ERX-5, CY);
+  ctx.bezierCurveTo(CX-ERX/2, CY+topY+2, CX+ERX/2, CY+topY+2, CX+ERX+5, CY);
+  ctx.strokeStyle='#241828'; ctx.lineWidth=2.5; ctx.stroke();
+
+  // lashes
+  ctx.lineCap='round';
+  for(let i=0;i<13;i++){
+    const t=(i/12)*Math.PI;
+    const lx=Math.round(CX+ERX*Math.cos(Math.PI-t));
+    const baseY = CY + (CY+topY - CY)*Math.abs(Math.sin(t));
+    const ly=Math.round(baseY - ERY*Math.abs(Math.sin(t))*(1-blink*1.05) - 5);
+    const len=16+8*Math.abs(Math.sin(t));
+    const dir=Math.PI-t-0.25;
+    ctx.beginPath(); ctx.moveTo(lx,ly);
+    ctx.lineTo(Math.round(lx+Math.cos(dir)*len), Math.round(ly-Math.abs(Math.sin(t-Math.PI/2)*0.5+0.5)*len));
+    ctx.strokeStyle='#180f1e'; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  if(!hasHand){
+    ctx.font='14px monospace'; ctx.fillStyle='rgba(100,96,130,0.7)';
+    ctx.textAlign='center'; ctx.fillText('point your index finger at the camera', CX, H-20);
+  }
+}
+
+function loop(){
+  gaze.x += (target.x - gaze.x) * 0.12;
+  gaze.y += (target.y - gaze.y) * 0.12;
+  drawEye(getBlinkVal());
+  document.getElementById('gx').textContent = gaze.x.toFixed(2);
+  document.getElementById('gy').textContent = gaze.y.toFixed(2);
+  requestAnimationFrame(loop);
+}
+loop();
+
+// MediaPipe
+const video = document.getElementById('video');
+
+const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.7 });
+hands.onResults(res => {
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length > 0){
+    const tip = res.multiHandLandmarks[0][8];
+    target.x = (tip.x - 0.5) * 2;
+    target.y = (tip.y - 0.5) * 2;
+    hasHand = true;
+    document.getElementById('hd').textContent = 'detected';
+  } else {
+    target.x *= 0.9; target.y *= 0.9;
+    hasHand = false;
+    document.getElementById('hd').textContent = 'none';
+  }
+});
+
+navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+  video.srcObject = stream;
+  video.play();
+  const cam = new Camera(video, {
+    onFrame: async () => { await hands.send({ image: video }); },
+    width: 640, height: 480
+  });
+  cam.start();
+  document.getElementById('msg').textContent = 'camera active';
+  document.getElementById('msg').style.color = '#5db8a0';
+}).catch(e => {
+  document.getElementById('msg').textContent = 'camera error: ' + e.message;
+  document.getElementById('msg').style.color = '#d85a30';
+});
+</script>
 </body>
 </html>
