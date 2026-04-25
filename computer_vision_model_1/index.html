@@ -2,204 +2,878 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Eye Finger Tracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eye Tracker</title>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&display=swap');
+
+  :root {
+    --bg: #080810;
+    --surface: #0e0e1a;
+    --border: #1e1e30;
+    --accent: #00e5ff;
+    --accent2: #7b2fff;
+    --iris: #2878d8;
+    --text: #8888aa;
+    --text-bright: #ccccdd;
+    --danger: #ff4444;
+    --ok: #00e5a0;
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0f0d18; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: monospace; color: #888; }
-  h1 { font-size: 14px; letter-spacing: 0.1em; color: #555; margin-bottom: 1rem; text-transform: lowercase; }
-  #eyeCanvas { border-radius: 12px; display: block; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .layout {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 220px 1fr 220px;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100vh;
+    gap: 0;
+  }
+
+  /* ─── HEADER ─── */
+  header {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(8,8,16,0.8);
+    backdrop-filter: blur(8px);
+  }
+  .logo {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700; font-size: 20px;
+    letter-spacing: 0.2em; color: var(--accent);
+    text-transform: uppercase;
+  }
+  .logo span { color: var(--text); font-weight: 300; }
+  .header-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; letter-spacing: 0.08em;
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
+    transition: all 0.4s;
+  }
+  .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .ver { font-size: 10px; color: #333344; }
+
+  /* ─── LEFT PANEL ─── */
+  .panel-left {
+    border-right: 1px solid var(--border);
+    padding: 20px 16px;
+    display: flex; flex-direction: column; gap: 20px;
+    background: rgba(14,14,26,0.5);
+  }
+
+  /* ─── RIGHT PANEL ─── */
+  .panel-right {
+    border-left: 1px solid var(--border);
+    padding: 20px 16px;
+    display: flex; flex-direction: column; gap: 20px;
+    background: rgba(14,14,26,0.5);
+  }
+
+  .section-label {
+    font-size: 9px; letter-spacing: 0.2em;
+    color: #333350; text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px; margin-bottom: 10px;
+  }
+
+  /* Metric rows */
+  .metric { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+  .metric-label { font-size: 9px; letter-spacing: 0.12em; color: #444466; text-transform: uppercase; }
+  .metric-value {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 22px; color: var(--accent);
+    line-height: 1;
+  }
+  .metric-value.green { color: var(--ok); }
+  .metric-value.red { color: var(--danger); }
+  .metric-value small { font-size: 11px; color: #444; }
+
+  /* Bar graph */
+  .bar-wrap { display: flex; flex-direction: column; gap: 6px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; font-size: 10px; }
+  .bar-row label { width: 12px; color: #444; }
+  .bar-bg { flex: 1; height: 4px; background: #1a1a2a; border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 50%; background: var(--accent); border-radius: 2px; transition: width 0.1s, background 0.3s; }
+  .bar-fill.y { background: var(--accent2); }
+
+  /* Mini cam */
+  #camPreview {
+    width: 100%; border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #000;
+    display: block;
+  }
+  .cam-label { font-size: 9px; color: #333; margin-bottom: 5px; }
+
+  /* Landmark dots display */
+  #landmarkCanvas {
+    width: 100%; border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #060610;
+    display: block;
+  }
+
+  /* Scan range indicator */
+  .range-display {
+    position: relative; width: 100%; aspect-ratio: 1;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: #06060e; overflow: hidden;
+  }
+  .range-display canvas { width: 100%; height: 100%; display: block; }
+
+  /* ─── CENTER ─── */
+  .center {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 24px 20px;
+    position: relative;
+  }
+
+  /* Eye wrapper with corner brackets */
+  .eye-frame {
+    position: relative;
+    display: inline-block;
+  }
+  .eye-frame::before, .eye-frame::after,
+  .eye-frame .br::before, .eye-frame .br::after {
+    content: ''; position: absolute;
+    width: 16px; height: 16px;
+    border-color: var(--accent); border-style: solid; border-width: 0;
+  }
+  .eye-frame::before  { top:-1px;    left:-1px;   border-top-width:2px;   border-left-width:2px;  }
+  .eye-frame::after   { top:-1px;    right:-1px;  border-top-width:2px;   border-right-width:2px; }
+  .eye-frame .br::before { bottom:-1px; left:-1px;  border-bottom-width:2px;border-left-width:2px;  }
+  .eye-frame .br::after  { bottom:-1px; right:-1px; border-bottom-width:2px;border-right-width:2px; }
+
+  #eyeCanvas {
+    display: block;
+    border-radius: 8px;
+    max-width: 100%;
+  }
+
+  /* Crosshair overlay on eye */
+  .crosshair {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+
+  .center-info {
+    margin-top: 16px; display: flex; gap: 32px;
+    font-size: 11px; color: #444;
+  }
+  .center-info span { color: var(--text); }
+  .center-info b { color: var(--accent); }
+
+  /* Start button */
+  #startBtn {
+    margin-top: 18px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px; letter-spacing: 0.15em;
+    padding: 10px 32px;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    position: relative; overflow: hidden;
+  }
+  #startBtn::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: var(--accent);
+    opacity: 0; transition: opacity 0.2s;
+  }
+  #startBtn:hover::before { opacity: 0.08; }
+  #startBtn:hover { box-shadow: 0 0 16px rgba(0,229,255,0.2); }
+  #startBtn:disabled { opacity: 0.3; cursor: default; }
+  #startBtn span { position: relative; z-index: 1; }
+
+  /* ─── FOOTER ─── */
+  footer {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+    padding: 10px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; color: #333;
+    background: rgba(8,8,16,0.8);
+  }
+
+  /* Settings sliders */
+  .slider-wrap { display: flex; flex-direction: column; gap: 10px; }
+  .slider-row { display: flex; flex-direction: column; gap: 4px; }
+  .slider-row label { font-size: 9px; letter-spacing: 0.1em; color: #444; text-transform: uppercase; }
+  .slider-row .slider-line { display: flex; align-items: center; gap: 8px; }
+  input[type=range] {
+    flex: 1; -webkit-appearance: none; height: 2px;
+    background: #1a1a2a; border-radius: 2px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--accent); cursor: pointer;
+    box-shadow: 0 0 6px var(--accent);
+  }
+  .slider-val { font-size: 10px; color: var(--accent); width: 30px; text-align: right; }
+
+  /* Mode toggle */
+  .toggle-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tog {
+    font-size: 9px; letter-spacing: 0.08em; padding: 4px 10px;
+    border: 1px solid #222; border-radius: 3px;
+    background: transparent; color: #444; cursor: pointer;
+    text-transform: uppercase; transition: all 0.2s;
+  }
+  .tog.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.05); }
+
   video { display: none; }
-  #hud { margin-top: 12px; font-size: 12px; color: #444; display: flex; gap: 2rem; }
-  #hud span { color: #5db8a0; }
-  #msg { margin-top: 8px; font-size: 12px; color: #555; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .panel-left, .panel-right { display: none; }
+    header { padding: 10px 16px; }
+  }
 </style>
 </head>
 <body>
 
-<h1>eye tracker — point your index finger</h1>
-<canvas id="eyeCanvas" width="640" height="480"></canvas>
+<div class="layout">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">Eye<span>Track</span> <span style="font-size:11px;color:#222233">///</span> <span style="font-size:12px;color:#333355">v2.0</span></div>
+    <div class="header-status">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">OFFLINE</span>
+    </div>
+    <div class="ver">mediapipe · canvas2d · expanded scan</div>
+  </header>
+
+  <!-- LEFT PANEL -->
+  <div class="panel-left">
+
+    <div>
+      <div class="section-label">Gaze Vector</div>
+      <div class="metric">
+        <div class="metric-label">X Axis</div>
+        <div class="metric-value" id="mvX">+0.00</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Y Axis</div>
+        <div class="metric-value" id="mvY">+0.00</div>
+      </div>
+      <div class="bar-wrap">
+        <div class="bar-row"><label>X</label><div class="bar-bg"><div class="bar-fill" id="barX"></div></div></div>
+        <div class="bar-row"><label>Y</label><div class="bar-bg"><div class="bar-fill y" id="barY"></div></div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Detection</div>
+      <div class="metric">
+        <div class="metric-label">Hand Status</div>
+        <div class="metric-value green" id="mvHand" style="font-size:14px">SEARCHING</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Confidence</div>
+        <div class="metric-value" id="mvConf">—</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Blink</div>
+        <div class="metric-value" id="mvBlink" style="font-size:14px">OPEN</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Scan Zone</div>
+      <div class="range-display">
+        <canvas id="scanCanvas" width="188" height="188"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- CENTER -->
+  <div class="center">
+    <div class="eye-frame">
+      <div class="br"></div>
+      <canvas id="eyeCanvas" width="640" height="480"></canvas>
+    </div>
+    <div class="center-info">
+      <div>fps <b id="fpsVal">0</b></div>
+      <div>scan range <b id="rangeVal">100</b>%</div>
+      <div>smooth <b id="smoothVal">12</b>%</div>
+      <div>landmarks <b id="lmVal">0</b></div>
+    </div>
+    <button id="startBtn"><span>⬤ INITIALISE CAMERA</span></button>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="panel-right">
+
+    <div>
+      <div class="section-label">Camera Feed</div>
+      <div class="cam-label">live input</div>
+      <canvas id="camPreview" width="188" height="141"></canvas>
+    </div>
+
+    <div>
+      <div class="section-label">Hand Landmarks</div>
+      <canvas id="landmarkCanvas" width="188" height="141"></canvas>
+    </div>
+
+    <div>
+      <div class="section-label">Settings</div>
+      <div class="slider-wrap">
+        <div class="slider-row">
+          <label>Scan Range</label>
+          <div class="slider-line">
+            <input type="range" id="sRange" min="50" max="200" value="100">
+            <span class="slider-val" id="sRangeVal">100</span>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Smoothing</label>
+          <div class="slider-line">
+            <input type="range" id="sSmooth" min="1" max="40" value="12">
+            <span class="slider-val" id="sSmoothVal">12</span>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Iris Size</label>
+          <div class="slider-line">
+            <input type="range" id="sIris" min="30" max="90" value="52">
+            <span class="slider-val" id="sIrisVal">52</span>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Blink Speed</label>
+          <div class="slider-line">
+            <input type="range" id="sBlink" min="50" max="300" value="130">
+            <span class="slider-val" id="sBlinkVal">130</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Tracking Mode</div>
+      <div class="toggle-row">
+        <button class="tog active" data-mode="index">Index</button>
+        <button class="tog" data-mode="middle">Middle</button>
+        <button class="tog" data-mode="wrist">Wrist</button>
+        <button class="tog" data-mode="palm">Palm</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <span>EYE TRACKER · MEDIAPIPE HANDS · CANVAS 2D</span>
+    <span id="footerMsg">awaiting initialisation</span>
+    <span id="footerTime">--:--:--</span>
+  </footer>
+
+</div>
+
 <video id="video" playsinline></video>
-<div id="hud">gaze x: <span id="gx">0.00</span> &nbsp; gaze y: <span id="gy">0.00</span> &nbsp; hand: <span id="hd">none</span></div>
-<div id="msg">starting camera…</div>
 
 <script>
-const canvas = document.getElementById('eyeCanvas');
-const ctx = canvas.getContext('2d');
+// ═══════════════════════════════════════════════════════════════
+//  SETTINGS (live-adjustable)
+// ═══════════════════════════════════════════════════════════════
+const cfg = {
+  scanRange: 1.0,    // multiplier: 1 = normal, 2 = 2× wider
+  smooth: 0.12,      // lerp factor
+  irisR: 52,
+  blinkDur: 130,
+  trackMode: 'index' // which landmark to track
+};
+
+// MediaPipe landmark indices
+const LANDMARKS = {
+  index:  8,   // index fingertip
+  middle: 12,  // middle fingertip
+  wrist:  0,   // wrist
+  palm:   9    // middle of palm
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════════════════════════════
+const eyeCanvas   = document.getElementById('eyeCanvas');
+const ec          = eyeCanvas.getContext('2d');
 const W = 640, H = 480;
 const CX = W/2, CY = H/2;
 const ERX = 155, ERY = 105;
-const IRIS_R = 52, PUPIL_R = 21;
-const MAX_TRAVEL = IRIS_R - PUPIL_R - 6;
 
-let gaze = {x:0, y:0}, target = {x:0, y:0};
+const camPreview    = document.getElementById('camPreview');
+const cc            = camPreview.getContext('2d');
+const lmCanvas      = document.getElementById('landmarkCanvas');
+const lc            = lmCanvas.getContext('2d');
+const scanCanvas    = document.getElementById('scanCanvas');
+const sc            = scanCanvas.getContext('2d');
+
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
+let gaze   = {x:0, y:0};
+let target = {x:0, y:0};
 let hasHand = false;
+let lastLandmarks = null;
+let frameCount = 0, fps = 0, lastFpsTime = performance.now();
+let trailPoints = [];  // gaze trail for scan canvas
 
-// --- blink ---
+// Blink
 let nextBlink = Date.now() + 2000 + Math.random()*3000;
-let blinkDur = 130;
 function getBlinkVal() {
   const now = Date.now();
   if (now < nextBlink) return 0;
   const t = now - nextBlink;
-  if (t > blinkDur) { nextBlink = Date.now() + 2000 + Math.random()*4000; return 0; }
-  return Math.pow(Math.sin((t/blinkDur)*Math.PI), 2);
+  if (t > cfg.blinkDur) {
+    nextBlink = Date.now() + 2000 + Math.random()*4000;
+    return 0;
+  }
+  return Math.pow(Math.sin((t / cfg.blinkDur) * Math.PI), 2);
 }
 
+// Deterministic vein RNG
 function pseudoRng(seed) {
   let s = seed;
-  return () => { s = Math.sin(s) * 10000; return s - Math.floor(s); };
+  return () => { s = Math.sin(s)*10000; return s - Math.floor(s); };
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  DRAW EYE
+// ═══════════════════════════════════════════════════════════════
 function drawEye(blink) {
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle = '#0f0d18';
-  ctx.fillRect(0,0,W,H);
+  const IRIS_R  = cfg.irisR;
+  const PUPIL_R = Math.round(IRIS_R * 0.40);
+  // Expanded travel: scanRange scales how far the pupil moves
+  const MAX_TRAVEL = (IRIS_R - PUPIL_R - 4) * (cfg.scanRange * 1.6);
+
+  ec.clearRect(0,0,W,H);
+  ec.fillStyle = '#080810';
+  ec.fillRect(0,0,W,H);
 
   const gx = gaze.x * MAX_TRAVEL * 0.85;
   const gy = gaze.y * MAX_TRAVEL * 0.55;
-  const icx = CX + gx, icy = CY + gy;
+  // Clamp so iris stays within sclera
+  const clampX = ERX - IRIS_R - 8;
+  const clampY = ERY - IRIS_R - 4;
+  const icx = CX + Math.max(-clampX, Math.min(clampX, gx));
+  const icy = CY + Math.max(-clampY, Math.min(clampY, gy));
 
-  // glow
-  const gl = ctx.createRadialGradient(CX,CY,0,CX,CY,ERX+80);
-  gl.addColorStop(0,'rgba(55,130,220,0.2)'); gl.addColorStop(1,'rgba(55,130,220,0)');
-  ctx.beginPath(); ctx.ellipse(CX,CY,ERX+80,ERY+80,0,0,Math.PI*2);
-  ctx.fillStyle=gl; ctx.fill();
+  // Ambient glow
+  const gl = ec.createRadialGradient(CX,CY,0,CX,CY,ERX+100);
+  gl.addColorStop(0,'rgba(40,120,220,0.22)');
+  gl.addColorStop(1,'rgba(40,120,220,0)');
+  ec.beginPath(); ec.ellipse(CX,CY,ERX+100,ERY+100,0,0,Math.PI*2);
+  ec.fillStyle=gl; ec.fill();
 
-  // sclera clip
-  ctx.save();
-  ctx.beginPath(); ctx.ellipse(CX,CY,ERX,ERY,0,0,Math.PI*2); ctx.clip();
-  ctx.fillStyle='#e4dfd4'; ctx.fill();
+  // ── Sclera ──
+  ec.save();
+  ec.beginPath(); ec.ellipse(CX,CY,ERX,ERY,0,0,Math.PI*2); ec.clip();
+  const scl = ec.createRadialGradient(CX,CY-20,10,CX,CY,ERY+30);
+  scl.addColorStop(0,'#eeeae0'); scl.addColorStop(1,'#d8d3c8');
+  ec.fillStyle=scl; ec.fill();
 
-  // veins
+  // Veins
   const rng = pseudoRng(42);
-  ctx.globalAlpha=0.3;
-  for(let i=0;i<8;i++){
-    const a=rng()*Math.PI*2, l=30+rng()*50;
-    const sx=CX+Math.cos(a)*50, sy=CY+Math.sin(a)*30;
-    ctx.beginPath(); ctx.moveTo(sx,sy);
-    ctx.lineTo(sx+Math.cos(a)*l, sy+Math.sin(a)*l);
-    ctx.strokeStyle='#c06060'; ctx.lineWidth=0.8; ctx.stroke();
+  ec.save(); ec.globalAlpha=0.28;
+  for(let i=0;i<10;i++){
+    const a=rng()*Math.PI*2, l=25+rng()*60;
+    const sx=CX+Math.cos(a)*55, sy=CY+Math.sin(a)*32;
+    ec.beginPath(); ec.moveTo(sx,sy);
+    ec.quadraticCurveTo(
+      sx+Math.cos(a+0.4)*l*0.5, sy+Math.sin(a+0.4)*l*0.5,
+      sx+Math.cos(a)*l, sy+Math.sin(a)*l
+    );
+    ec.strokeStyle=`rgba(${180+Math.round(rng()*30)},${60+Math.round(rng()*30)},${60+Math.round(rng()*20)},1)`;
+    ec.lineWidth=0.7; ec.stroke();
   }
-  ctx.globalAlpha=1;
+  ec.restore();
 
-  // iris
-  ctx.beginPath(); ctx.arc(icx,icy,IRIS_R,0,Math.PI*2);
-  const ig=ctx.createRadialGradient(icx,icy-12,2,icx,icy,IRIS_R);
-  ig.addColorStop(0,'#52aad8'); ig.addColorStop(0.5,'#2070be'); ig.addColorStop(1,'#1248a0');
-  ctx.fillStyle=ig; ctx.fill();
+  // ── Iris ──
+  ec.beginPath(); ec.arc(icx,icy,IRIS_R,0,Math.PI*2);
+  const ig=ec.createRadialGradient(icx,icy-IRIS_R*0.25,2,icx,icy,IRIS_R);
+  ig.addColorStop(0,'#5ab8e8');
+  ig.addColorStop(0.35,'#2878d8');
+  ig.addColorStop(0.7,'#1458b8');
+  ig.addColorStop(1,'#0d3a90');
+  ec.fillStyle=ig; ec.fill();
 
-  // iris texture lines
-  for(let i=0;i<22;i++){
-    const a=(i/22)*Math.PI*2;
-    ctx.beginPath();
-    ctx.moveTo(icx+Math.cos(a)*(PUPIL_R+5), icy+Math.sin(a)*(PUPIL_R+5));
-    ctx.lineTo(icx+Math.cos(a)*(IRIS_R-4),  icy+Math.sin(a)*(IRIS_R-4));
-    ctx.strokeStyle='rgba(15,60,150,0.45)'; ctx.lineWidth=0.8; ctx.stroke();
+  // Iris texture
+  for(let i=0;i<28;i++){
+    const a=(i/28)*Math.PI*2;
+    ec.beginPath();
+    ec.moveTo(icx+Math.cos(a)*(PUPIL_R+4), icy+Math.sin(a)*(PUPIL_R+4));
+    ec.lineTo(icx+Math.cos(a)*(IRIS_R-3),  icy+Math.sin(a)*(IRIS_R-3));
+    ec.strokeStyle='rgba(10,55,150,0.4)'; ec.lineWidth=0.7; ec.stroke();
   }
+  // Limbal ring
+  ec.beginPath(); ec.arc(icx,icy,IRIS_R-1,0,Math.PI*2);
+  ec.strokeStyle='rgba(5,25,80,0.7)'; ec.lineWidth=2.5; ec.stroke();
+  // Inner ring
+  ec.beginPath(); ec.arc(icx,icy,PUPIL_R+7,0,Math.PI*2);
+  ec.strokeStyle='rgba(8,40,120,0.5)'; ec.lineWidth=2; ec.stroke();
 
-  // inner ring
-  ctx.beginPath(); ctx.arc(icx,icy,PUPIL_R+8,0,Math.PI*2);
-  ctx.strokeStyle='rgba(8,40,120,0.55)'; ctx.lineWidth=3; ctx.stroke();
+  // ── Pupil ──
+  const pg=ec.createRadialGradient(icx,icy,0,icx,icy,PUPIL_R);
+  pg.addColorStop(0,'#1c1c1c'); pg.addColorStop(1,'#030303');
+  ec.beginPath(); ec.arc(icx,icy,PUPIL_R,0,Math.PI*2);
+  ec.fillStyle=pg; ec.fill();
 
-  // pupil
-  const pg=ctx.createRadialGradient(icx,icy,0,icx,icy,PUPIL_R);
-  pg.addColorStop(0,'#181818'); pg.addColorStop(1,'#040404');
-  ctx.beginPath(); ctx.arc(icx,icy,PUPIL_R,0,Math.PI*2);
-  ctx.fillStyle=pg; ctx.fill();
+  // ── Specular highlights ──
+  const hx=icx-IRIS_R*0.28, hy=icy-IRIS_R*0.28;
+  ec.beginPath(); ec.arc(hx,hy,IRIS_R*0.17,0,Math.PI*2);
+  ec.fillStyle='rgba(255,255,255,0.88)'; ec.fill();
+  ec.beginPath(); ec.arc(hx+14,hy+13,IRIS_R*0.08,0,Math.PI*2);
+  ec.fillStyle='rgba(255,255,255,0.45)'; ec.fill();
+  // Tiny lower highlight
+  ec.beginPath(); ec.arc(icx+IRIS_R*0.3,icy+IRIS_R*0.3,3,0,Math.PI*2);
+  ec.fillStyle='rgba(200,220,255,0.2)'; ec.fill();
 
-  // highlights
-  ctx.beginPath(); ctx.arc(icx-IRIS_R/4, icy-IRIS_R/4, 9, 0, Math.PI*2);
-  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fill();
-  ctx.beginPath(); ctx.arc(icx-IRIS_R/4+14, icy-IRIS_R/4+12, 4, 0, Math.PI*2);
-  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fill();
+  ec.restore(); // end sclera clip
 
-  ctx.restore();
+  // ── Eyelids ──
+  const topY = -ERY*1.18 + blink*ERY*1.14;
 
-  // top eyelid
-  const topY = -ERY*1.18 + blink*ERY*1.12;
-  ctx.beginPath();
-  ctx.moveTo(CX-ERX-10, CY);
-  ctx.bezierCurveTo(CX-ERX/2, CY+topY, CX+ERX/2, CY+topY, CX+ERX+10, CY);
-  ctx.lineTo(CX+ERX+10, CY-ERY*2); ctx.lineTo(CX-ERX-10, CY-ERY*2);
-  ctx.closePath(); ctx.fillStyle='#0f0d18'; ctx.fill();
+  // Top lid shape
+  ec.beginPath();
+  ec.moveTo(CX-ERX-14, CY);
+  ec.bezierCurveTo(CX-ERX*0.5, CY+topY, CX+ERX*0.5, CY+topY, CX+ERX+14, CY);
+  ec.lineTo(CX+ERX+14, CY-ERY*2.5);
+  ec.lineTo(CX-ERX-14, CY-ERY*2.5);
+  ec.closePath();
+  const tg = ec.createLinearGradient(CX, CY-ERY, CX, CY+topY+20);
+  tg.addColorStop(0,'#080810'); tg.addColorStop(1,'#100d18');
+  ec.fillStyle=tg; ec.fill();
 
-  // bottom eyelid
-  ctx.beginPath();
-  ctx.moveTo(CX-ERX-10, CY);
-  ctx.bezierCurveTo(CX-ERX/2, CY+ERY*1.12, CX+ERX/2, CY+ERY*1.12, CX+ERX+10, CY);
-  ctx.lineTo(CX+ERX+10, CY+ERY*2); ctx.lineTo(CX-ERX-10, CY+ERY*2);
-  ctx.closePath(); ctx.fillStyle='#0f0d18'; ctx.fill();
+  // Bottom lid
+  ec.beginPath();
+  ec.moveTo(CX-ERX-14, CY);
+  ec.bezierCurveTo(CX-ERX*0.5, CY+ERY*1.14, CX+ERX*0.5, CY+ERY*1.14, CX+ERX+14, CY);
+  ec.lineTo(CX+ERX+14, CY+ERY*2.5);
+  ec.lineTo(CX-ERX-14, CY+ERY*2.5);
+  ec.closePath();
+  ec.fillStyle='#080810'; ec.fill();
 
-  // lid edge
-  ctx.beginPath();
-  ctx.moveTo(CX-ERX-5, CY);
-  ctx.bezierCurveTo(CX-ERX/2, CY+topY+2, CX+ERX/2, CY+topY+2, CX+ERX+5, CY);
-  ctx.strokeStyle='#241828'; ctx.lineWidth=2.5; ctx.stroke();
+  // Lid crease / edge
+  ec.beginPath();
+  ec.moveTo(CX-ERX-8, CY);
+  ec.bezierCurveTo(CX-ERX*0.5, CY+topY+3, CX+ERX*0.5, CY+topY+3, CX+ERX+8, CY);
+  ec.strokeStyle='rgba(25,18,32,0.9)'; ec.lineWidth=3; ec.stroke();
 
-  // lashes
-  ctx.lineCap='round';
-  for(let i=0;i<13;i++){
-    const t=(i/12)*Math.PI;
+  // Subtle skin tone at lid edge
+  ec.beginPath();
+  ec.moveTo(CX-ERX-6, CY);
+  ec.bezierCurveTo(CX-ERX*0.5, CY+topY+8, CX+ERX*0.5, CY+topY+8, CX+ERX+6, CY);
+  ec.strokeStyle='rgba(90,55,70,0.15)'; ec.lineWidth=6; ec.stroke();
+
+  // ── Eyelashes ──
+  ec.lineCap='round';
+  for(let i=0;i<15;i++){
+    const t=(i/14)*Math.PI;
     const lx=Math.round(CX+ERX*Math.cos(Math.PI-t));
-    const baseY = CY + (CY+topY - CY)*Math.abs(Math.sin(t));
-    const ly=Math.round(baseY - ERY*Math.abs(Math.sin(t))*(1-blink*1.05) - 5);
-    const len=16+8*Math.abs(Math.sin(t));
-    const dir=Math.PI-t-0.25;
-    ctx.beginPath(); ctx.moveTo(lx,ly);
-    ctx.lineTo(Math.round(lx+Math.cos(dir)*len), Math.round(ly-Math.abs(Math.sin(t-Math.PI/2)*0.5+0.5)*len));
-    ctx.strokeStyle='#180f1e'; ctx.lineWidth=2; ctx.stroke();
+    const ty2= CY + topY * Math.abs(Math.sin(t));
+    const ly=Math.round(ty2 - ERY*Math.abs(Math.sin(t))*(1-blink*1.08) - 4);
+    const len=14 + 10*Math.abs(Math.sin(t));
+    const curlX = lx + Math.cos(Math.PI-t-0.3)*len;
+    const curlY = ly - Math.abs(Math.sin((t-Math.PI/2)*0.5)+0.4)*len;
+    ec.beginPath(); ec.moveTo(lx,ly);
+    ec.quadraticCurveTo(lx+Math.cos(Math.PI-t-0.15)*len*0.5, ly-len*0.3, curlX, curlY);
+    ec.strokeStyle='rgba(15,8,20,0.95)'; ec.lineWidth=1.8; ec.stroke();
   }
 
+  // Bottom lashes (subtle)
+  for(let i=1;i<13;i++){
+    const t=(i/13)*Math.PI;
+    const lx=Math.round(CX+ERX*Math.cos(Math.PI-t));
+    const ly=Math.round(CY + ERY*Math.abs(Math.sin(t))*0.92 + 4);
+    const len=5 + 4*Math.abs(Math.sin(t));
+    ec.beginPath(); ec.moveTo(lx,ly);
+    ec.lineTo(lx+Math.cos(Math.PI-t)*len*0.2, ly+len);
+    ec.strokeStyle='rgba(20,12,28,0.5)'; ec.lineWidth=1.2; ec.stroke();
+  }
+
+  // Hint text
   if(!hasHand){
-    ctx.font='14px monospace'; ctx.fillStyle='rgba(100,96,130,0.7)';
-    ctx.textAlign='center'; ctx.fillText('point your index finger at the camera', CX, H-20);
+    ec.font='500 13px "Share Tech Mono", monospace';
+    ec.fillStyle='rgba(0,229,255,0.25)';
+    ec.textAlign='center';
+    ec.fillText('▲  raise your finger to track  ▲', CX, H-18);
   }
 }
 
-function loop(){
-  gaze.x += (target.x - gaze.x) * 0.12;
-  gaze.y += (target.y - gaze.y) * 0.12;
-  drawEye(getBlinkVal());
-  document.getElementById('gx').textContent = gaze.x.toFixed(2);
-  document.getElementById('gy').textContent = gaze.y.toFixed(2);
+// ═══════════════════════════════════════════════════════════════
+//  DRAW MINI CAM PREVIEW
+// ═══════════════════════════════════════════════════════════════
+let videoEl = null;
+function drawCamPreview() {
+  if (!videoEl || videoEl.readyState < 2) return;
+  cc.save();
+  cc.scale(-1,1); cc.translate(-188,0); // mirror
+  cc.drawImage(videoEl, 0, 0, 188, 141);
+  cc.restore();
+  // scanline overlay
+  cc.fillStyle='rgba(0,229,255,0.03)';
+  for(let y=0;y<141;y+=3){ cc.fillRect(0,y,188,1); }
+  // border glow if hand detected
+  if(hasHand){
+    cc.strokeStyle='rgba(0,229,255,0.4)';
+    cc.lineWidth=1.5;
+    cc.strokeRect(0.75,0.75,186.5,139.5);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAW LANDMARK CANVAS
+// ═══════════════════════════════════════════════════════════════
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+function drawLandmarks(lms) {
+  lc.fillStyle='#06060e'; lc.fillRect(0,0,188,141);
+  if(!lms){ lc.fillStyle='#1a1a2a'; lc.font='10px monospace'; lc.textAlign='center'; lc.fillText('no hand', 94, 74); return; }
+  lc.strokeStyle='rgba(0,229,255,0.3)'; lc.lineWidth=1;
+  HAND_CONNECTIONS.forEach(([a,b])=>{
+    const pa=lms[a], pb=lms[b];
+    lc.beginPath();
+    lc.moveTo(pa.x*188, pa.y*141);
+    lc.lineTo(pb.x*188, pb.y*141);
+    lc.stroke();
+  });
+  lms.forEach((lm,i)=>{
+    const isTracked = i === LANDMARKS[cfg.trackMode];
+    lc.beginPath();
+    lc.arc(lm.x*188, lm.y*141, isTracked?5:2.5, 0, Math.PI*2);
+    lc.fillStyle = isTracked ? '#00e5ff' : 'rgba(120,180,255,0.6)';
+    lc.fill();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAW SCAN ZONE INDICATOR
+// ═══════════════════════════════════════════════════════════════
+function drawScanZone() {
+  sc.fillStyle='#06060e'; sc.fillRect(0,0,188,188);
+  const cx=94, cy=94;
+  // Grid
+  sc.strokeStyle='rgba(0,229,255,0.07)'; sc.lineWidth=0.5;
+  for(let i=20;i<188;i+=20){ sc.beginPath(); sc.moveTo(i,0); sc.lineTo(i,188); sc.stroke(); sc.beginPath(); sc.moveTo(0,i); sc.lineTo(188,i); sc.stroke(); }
+  // Max range circle
+  const maxR = 60 * cfg.scanRange;
+  sc.beginPath(); sc.arc(cx,cy, Math.min(maxR,86), 0, Math.PI*2);
+  sc.strokeStyle='rgba(0,229,255,0.15)'; sc.lineWidth=1; sc.stroke();
+  // Zone rings
+  [0.33,0.66,1.0].forEach((f,i)=>{
+    sc.beginPath(); sc.arc(cx,cy, Math.min(maxR*f,86), 0, Math.PI*2);
+    sc.strokeStyle=`rgba(0,229,255,${0.06+i*0.04})`; sc.lineWidth=0.5; sc.stroke();
+  });
+  // Trail
+  if(trailPoints.length > 1){
+    sc.beginPath(); sc.moveTo(trailPoints[0].x,trailPoints[0].y);
+    for(let i=1;i<trailPoints.length;i++){
+      sc.lineTo(trailPoints[i].x,trailPoints[i].y);
+    }
+    sc.strokeStyle='rgba(0,229,255,0.2)'; sc.lineWidth=1; sc.stroke();
+  }
+  // Current gaze dot
+  const dotX = cx + gaze.x * Math.min(maxR,80) * 0.85;
+  const dotY = cy + gaze.y * Math.min(maxR,80) * 0.6;
+  sc.beginPath(); sc.arc(dotX, dotY, 4, 0, Math.PI*2);
+  sc.fillStyle='#00e5ff'; sc.fill();
+  sc.beginPath(); sc.arc(dotX, dotY, 8, 0, Math.PI*2);
+  sc.fillStyle='rgba(0,229,255,0.15)'; sc.fill();
+  // Crosshairs
+  sc.strokeStyle='rgba(0,229,255,0.12)'; sc.lineWidth=0.5;
+  sc.beginPath(); sc.moveTo(cx,0); sc.lineTo(cx,188); sc.stroke();
+  sc.beginPath(); sc.moveTo(0,cy); sc.lineTo(188,cy); sc.stroke();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════════════
+function loop() {
+  // Smooth gaze
+  gaze.x += (target.x - gaze.x) * cfg.smooth;
+  gaze.y += (target.y - gaze.y) * cfg.smooth;
+
+  // Trail
+  const cx=94, cy=94, maxR=Math.min(60*cfg.scanRange,80);
+  trailPoints.push({ x: cx+gaze.x*maxR*0.85, y: cy+gaze.y*maxR*0.6 });
+  if(trailPoints.length > 60) trailPoints.shift();
+
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if(now - lastFpsTime >= 1000){ fps=frameCount; frameCount=0; lastFpsTime=now; }
+
+  const blink = getBlinkVal();
+
+  drawEye(blink);
+  drawCamPreview();
+  drawLandmarks(lastLandmarks);
+  drawScanZone();
+
+  // HUD updates
+  document.getElementById('mvX').textContent = (gaze.x>=0?'+':'')+gaze.x.toFixed(3);
+  document.getElementById('mvY').textContent = (gaze.y>=0?'+':'')+gaze.y.toFixed(3);
+  document.getElementById('mvBlink').textContent = blink > 0.3 ? 'BLINK' : 'OPEN';
+  document.getElementById('fpsVal').textContent = fps;
+  document.getElementById('rangeVal').textContent = Math.round(cfg.scanRange*100);
+  document.getElementById('smoothVal').textContent = Math.round(cfg.smooth*100);
+  document.getElementById('lmVal').textContent = lastLandmarks ? lastLandmarks.length : 0;
+
+  // Bars: map -1..1 to 0-100%
+  const bx = ((gaze.x+1)/2)*100;
+  const by = ((gaze.y+1)/2)*100;
+  document.getElementById('barX').style.width = bx+'%';
+  document.getElementById('barY').style.width = by+'%';
+
+  // Clock
+  const d=new Date();
+  document.getElementById('footerTime').textContent =
+    d.getHours().toString().padStart(2,'0')+':'+
+    d.getMinutes().toString().padStart(2,'0')+':'+
+    d.getSeconds().toString().padStart(2,'0');
+
   requestAnimationFrame(loop);
 }
 loop();
 
-// MediaPipe
-const video = document.getElementById('video');
+// ═══════════════════════════════════════════════════════════════
+//  MEDIAPIPE INIT
+// ═══════════════════════════════════════════════════════════════
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true;
+  btn.querySelector('span').textContent = '◌ INITIALISING…';
+  document.getElementById('footerMsg').textContent = 'requesting camera access…';
 
-const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.7 });
-hands.onResults(res => {
-  if(res.multiHandLandmarks && res.multiHandLandmarks.length > 0){
-    const tip = res.multiHandLandmarks[0][8];
-    target.x = (tip.x - 0.5) * 2;
-    target.y = (tip.y - 0.5) * 2;
-    hasHand = true;
-    document.getElementById('hd').textContent = 'detected';
-  } else {
-    target.x *= 0.9; target.y *= 0.9;
-    hasHand = false;
-    document.getElementById('hd').textContent = 'none';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 } });
+    videoEl = document.getElementById('video');
+    videoEl.srcObject = stream;
+    videoEl.play();
+
+    const hands = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.65,
+      minTrackingConfidence: 0.65
+    });
+
+    hands.onResults(res => {
+      if(res.multiHandLandmarks && res.multiHandLandmarks.length > 0){
+        const lms = res.multiHandLandmarks[0];
+        lastLandmarks = lms;
+        const lmIdx = LANDMARKS[cfg.trackMode];
+        const tip = lms[lmIdx];
+        // Raw 0-1 → -1..1, then scale by scanRange for expanded coverage
+        target.x = (tip.x - 0.5) * 2 * cfg.scanRange;
+        target.y = (tip.y - 0.5) * 2 * cfg.scanRange;
+        // Clamp to -1..1 after range expansion
+        target.x = Math.max(-1, Math.min(1, target.x));
+        target.y = Math.max(-1, Math.min(1, target.y));
+        hasHand = true;
+        document.getElementById('mvHand').textContent = 'DETECTED';
+        document.getElementById('mvHand').style.color = 'var(--ok)';
+        document.getElementById('mvConf').textContent = '●●●●●';
+      } else {
+        lastLandmarks = null;
+        target.x *= 0.92; target.y *= 0.92;
+        hasHand = false;
+        document.getElementById('mvHand').textContent = 'SEARCHING';
+        document.getElementById('mvHand').style.color = 'var(--accent)';
+        document.getElementById('mvConf').textContent = '○○○○○';
+      }
+    });
+
+    const cam = new Camera(videoEl, {
+      onFrame: async () => { await hands.send({ image: videoEl }); },
+      width: 640, height: 480
+    });
+    cam.start();
+
+    document.getElementById('statusDot').classList.add('live');
+    document.getElementById('statusText').textContent = 'LIVE';
+    btn.querySelector('span').textContent = '● CAMERA ACTIVE';
+    document.getElementById('footerMsg').textContent = 'tracking active · point index finger at camera';
+
+  } catch(e) {
+    btn.disabled = false;
+    btn.querySelector('span').textContent = '⬤ RETRY';
+    document.getElementById('footerMsg').textContent = 'error: ' + e.message;
+    document.getElementById('statusText').textContent = 'ERROR';
   }
 });
 
-navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
-  video.srcObject = stream;
-  video.play();
-  const cam = new Camera(video, {
-    onFrame: async () => { await hands.send({ image: video }); },
-    width: 640, height: 480
+// ═══════════════════════════════════════════════════════════════
+//  SETTINGS CONTROLS
+// ═══════════════════════════════════════════════════════════════
+function bindSlider(id, valId, key, scale=1, displayScale=1){
+  const el = document.getElementById(id);
+  const vEl = document.getElementById(valId);
+  el.addEventListener('input', ()=>{
+    cfg[key] = parseFloat(el.value) / scale;
+    vEl.textContent = Math.round(parseFloat(el.value)/scale*displayScale);
   });
-  cam.start();
-  document.getElementById('msg').textContent = 'camera active';
-  document.getElementById('msg').style.color = '#5db8a0';
-}).catch(e => {
-  document.getElementById('msg').textContent = 'camera error: ' + e.message;
-  document.getElementById('msg').style.color = '#d85a30';
+}
+bindSlider('sRange',  'sRangeVal',  'scanRange', 100, 100);
+bindSlider('sSmooth', 'sSmoothVal', 'smooth',    100, 100);
+bindSlider('sIris',   'sIrisVal',   'irisR',     1,   1);
+bindSlider('sBlink',  'sBlinkVal',  'blinkDur',  1,   1);
+
+// Sync display labels
+document.getElementById('rangeVal').textContent = '100';
+document.getElementById('smoothVal').textContent = '12';
+
+// Mode toggles
+document.querySelectorAll('.tog').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tog').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    cfg.trackMode = btn.dataset.mode;
+  });
 });
 </script>
 </body>
