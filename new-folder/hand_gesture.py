@@ -1,3 +1,24 @@
+import ctypes
+import sys
+
+# --- Experimental workaround for Python 3.14 + MediaPipe on Windows ---
+# MediaPipe's loader looks up a function called "free" in its own DLL, which
+# doesn't export it on Windows. If the lookup fails, fall back to the
+# Windows C runtime's free().
+if sys.platform == "win32":
+    _orig_getitem = ctypes.CDLL.__getitem__
+
+    def _patched_getitem(self, name):
+        try:
+            return _orig_getitem(self, name)
+        except AttributeError:
+            if name == "free":
+                return ctypes.CDLL("ucrtbase")["free"]
+            raise
+
+    ctypes.CDLL.__getitem__ = _patched_getitem
+# -----------------------------------------------------------------------
+
 import math
 import os
 import time
@@ -32,6 +53,20 @@ def ensure_model():
         print("Downloading hand landmarker model...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Done.")
+
+
+def open_camera():
+    """Try several backends and camera indexes until one works."""
+    for backend in (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY):
+        for index in (0, 1, 2, 3):
+            cap = cv2.VideoCapture(index, backend)
+            if cap.isOpened():
+                ok, _ = cap.read()
+                if ok:
+                    print(f"Using camera index {index} (backend {backend})")
+                    return cap
+            cap.release()
+    return None
 
 
 def distance(a, b):
@@ -100,9 +135,12 @@ def main():
         min_tracking_confidence=0.6,
     )
 
-    cap = cv2.VideoCapture(1)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open webcam")
+    cap = open_camera()
+    if cap is None:
+        raise RuntimeError(
+            "Could not open webcam. Close other apps using the camera and "
+            "check Settings > Privacy & security > Camera."
+        )
 
     prev_time = 0
     start = time.monotonic()
@@ -160,6 +198,9 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
